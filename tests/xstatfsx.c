@@ -38,17 +38,12 @@
 #include "xlat/statfs_flags.h"
 
 #define PRINT_NUM(arg)							\
-	do {								\
-		if (sizeof(b->arg) == sizeof(int))			\
-			printf(", %s=%u", #arg,				\
-			       (unsigned int) b->arg);			\
-		else if (sizeof(b->arg) == sizeof(long))		\
-			printf(", %s=%lu", #arg,			\
-			       (unsigned long) b->arg);			\
-		else							\
-			printf(", %s=%llu", #arg,			\
-			       (unsigned long long) b->arg);		\
-	} while (0)
+	if (sizeof(b->arg) == sizeof(int))				\
+		printf(", %s=%u", #arg, (unsigned int) b->arg);		\
+	else if (sizeof(b->arg) == sizeof(long))				\
+		printf(", %s=%lu", #arg, (unsigned long) b->arg);	\
+	else								\
+		printf(", %s=%llu", #arg, (unsigned long long) b->arg)
 
 static void
 print_statfs_type(const char *const prefix, const unsigned int magic)

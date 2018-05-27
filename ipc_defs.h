@@ -41,11 +41,8 @@
 # define IPC_64 0x100
 #endif
 
-#define PRINTCTL(flagset, arg, dflt)				\
-	do {							\
-		if ((arg) & IPC_64)				\
-			tprints("IPC_64|");			\
-		printxval((flagset), (arg) & ~IPC_64, dflt);	\
-	} while (0)
+#define PRINTCTL(flagset, arg, dflt) \
+	if ((arg) & IPC_64) tprints("IPC_64|"); \
+	printxval((flagset), (arg) &~ IPC_64, dflt)
 
 #endif /* !STRACE_IPC_DEFS_H */

@@ -476,7 +476,6 @@ errno2name(void)
 #ifdef EXFULL
 	CASE(EXFULL);
 #endif
-	default:
-		perror_msg_and_fail("unknown errno %d", errno);
+	default: perror_msg_and_fail("unknown errno %d", errno);
 	}
 }

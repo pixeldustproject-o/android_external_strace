@@ -36,6 +36,8 @@
 #  define XATTR_SIZE_MAX 65536
 # endif
 
+#define DEFAULT_STRLEN 32
+
 int
 main(void)
 {

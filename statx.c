@@ -26,7 +26,6 @@
  */
 
 #include "defs.h"
-#include "print_fields.h"
 #include "statx.h"
 
 #include <sys/stat.h>
@@ -55,6 +54,9 @@ SYS_FUNC(statx)
 		printflags(statx_masks, tcp->u_arg[3], "STATX_???");
 		tprints(", ");
 	} else {
+#define PRINT_FIELD_U(field) \
+	tprintf(", %s=%llu", #field, (unsigned long long) stx.field)
+
 #define PRINT_FIELD_TIME(field)						\
 	do {								\
 		tprintf(", " #field "={tv_sec=%" PRId64			\
@@ -72,13 +74,13 @@ SYS_FUNC(statx)
 		printflags(statx_masks, stx.stx_mask, "STATX_???");
 
 		if (!abbrev(tcp))
-			PRINT_FIELD_U(", ", stx, stx_blksize);
+			PRINT_FIELD_U(stx_blksize);
 
 		tprints(", stx_attributes=");
 		printflags(statx_attrs, stx.stx_attributes, "STATX_ATTR_???");
 
 		if (!abbrev(tcp)) {
-			PRINT_FIELD_U(", ", stx, stx_nlink);
+			PRINT_FIELD_U(stx_nlink);
 			printuid(", stx_uid=", stx.stx_uid);
 			printuid(", stx_gid=", stx.stx_gid);
 		}
@@ -87,12 +89,12 @@ SYS_FUNC(statx)
 		print_symbolic_mode_t(stx.stx_mode);
 
 		if (!abbrev(tcp))
-			PRINT_FIELD_U(", ", stx, stx_ino);
+			PRINT_FIELD_U(stx_ino);
 
-		PRINT_FIELD_U(", ", stx, stx_size);
+		PRINT_FIELD_U(stx_size);
 
 		if (!abbrev(tcp)) {
-			PRINT_FIELD_U(", ", stx, stx_blocks);
+			PRINT_FIELD_U(stx_blocks);
 
 			tprints(", stx_attributes_mask=");
 			printflags(statx_attrs, stx.stx_attributes_mask,
@@ -102,10 +104,10 @@ SYS_FUNC(statx)
 			PRINT_FIELD_TIME(stx_btime);
 			PRINT_FIELD_TIME(stx_ctime);
 			PRINT_FIELD_TIME(stx_mtime);
-			PRINT_FIELD_U(", ", stx, stx_rdev_major);
-			PRINT_FIELD_U(", ", stx, stx_rdev_minor);
-			PRINT_FIELD_U(", ", stx, stx_dev_major);
-			PRINT_FIELD_U(", ", stx, stx_dev_minor);
+			PRINT_FIELD_U(stx_rdev_major);
+			PRINT_FIELD_U(stx_rdev_minor);
+			PRINT_FIELD_U(stx_dev_major);
+			PRINT_FIELD_U(stx_dev_minor);
 		} else {
 			tprints(", ...");
 		}

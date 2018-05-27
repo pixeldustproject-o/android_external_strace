@@ -31,19 +31,20 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
-#include "netlink.h"
+#include <linux/netlink.h>
 #include <linux/sock_diag.h>
 #include <linux/inet_diag.h>
 #include <linux/unix_diag.h>
 #include <linux/netlink_diag.h>
 #include <linux/rtnetlink.h>
-#if HAVE_LINUX_GENETLINK_H
-#include <linux/genetlink.h>
-#endif
 
 #include <sys/un.h>
 #ifndef UNIX_PATH_MAX
 # define UNIX_PATH_MAX sizeof(((struct sockaddr_un *) 0)->sun_path)
+#endif
+
+#ifndef NETLINK_SOCK_DIAG
+# define NETLINK_SOCK_DIAG 4
 #endif
 
 typedef struct {
@@ -56,29 +57,23 @@ static cache_entry cache[CACHE_SIZE];
 #define CACHE_MASK (CACHE_SIZE - 1)
 
 static int
-cache_inode_details(const unsigned long inode, char *const details)
+cache_and_print_inode_details(const unsigned long inode, char *const details)
 {
 	cache_entry *e = &cache[inode & CACHE_MASK];
 	free(e->details);
 	e->inode = inode;
 	e->details = details;
 
+	tprints(details);
 	return 1;
 }
 
-static const char *
-get_sockaddr_by_inode_cached(const unsigned long inode)
-{
-	const cache_entry *const e = &cache[inode & CACHE_MASK];
-	return (e && inode == e->inode) ? e->details : NULL;
-}
-
-static bool
+bool
 print_sockaddr_by_inode_cached(const unsigned long inode)
 {
-	const char *const details = get_sockaddr_by_inode_cached(inode);
-	if (details) {
-		tprints(details);
+	const cache_entry *const e = &cache[inode & CACHE_MASK];
+	if (e && inode == e->inode) {
+		tprints(e->details);
 		return true;
 	}
 	return false;
@@ -133,10 +128,9 @@ inet_send_query(const int fd, const int family, const int proto)
 }
 
 static int
-inet_parse_response(const void *const data, const int data_len,
-		    const unsigned long inode, void *opaque_data)
+inet_parse_response(const char *const proto_name, const void *const data,
+		    const int data_len, const unsigned long inode)
 {
-	const char *const proto_name = opaque_data;
 	const struct inet_diag_msg *const diag_msg = data;
 	static const char zero_addr[sizeof(struct in6_addr)];
 	socklen_t addr_size, text_size;
@@ -146,7 +140,7 @@ inet_parse_response(const void *const data, const int data_len,
 	if (diag_msg->idiag_inode != inode)
 		return 0;
 
-	switch (diag_msg->idiag_family) {
+	switch(diag_msg->idiag_family) {
 		case AF_INET:
 			addr_size = sizeof(struct in_addr);
 			text_size = INET_ADDRSTRLEN;
@@ -184,15 +178,14 @@ inet_parse_response(const void *const data, const int data_len,
 			return false;
 	}
 
-	return cache_inode_details(inode, details);
+	return cache_and_print_inode_details(inode, details);
 }
 
 static bool
 receive_responses(const int fd, const unsigned long inode,
-		  const unsigned long expected_msg_type,
-		  int (*parser)(const void *, int,
-				unsigned long, void *),
-		  void *opaque_data)
+		  const char *proto_name,
+		  int (* parser) (const char *, const void *,
+				  int, unsigned long))
 {
 	static union {
 		struct nlmsghdr hdr;
@@ -227,10 +220,10 @@ receive_responses(const int fd, const unsigned long inode,
 		if (!NLMSG_OK(h, ret))
 			return false;
 		for (; NLMSG_OK(h, ret); h = NLMSG_NEXT(h, ret)) {
-			if (h->nlmsg_type != expected_msg_type)
+			if (h->nlmsg_type != SOCK_DIAG_BY_FAMILY)
 				return false;
-			const int rc = parser(NLMSG_DATA(h),
-					      h->nlmsg_len, inode, opaque_data);
+			const int rc = parser(proto_name, NLMSG_DATA(h),
+					      h->nlmsg_len, inode);
 			if (rc > 0)
 				return true;
 			if (rc < 0)
@@ -238,6 +231,14 @@ receive_responses(const int fd, const unsigned long inode,
 		}
 		flags = MSG_DONTWAIT;
 	}
+}
+
+static bool
+inet_print(const int fd, const int family, const int protocol,
+	   const unsigned long inode, const char *proto_name)
+{
+	return inet_send_query(fd, family, protocol)
+		&& receive_responses(fd, inode, proto_name, inet_parse_response);
 }
 
 static bool
@@ -263,10 +264,9 @@ unix_send_query(const int fd, const unsigned long inode)
 }
 
 static int
-unix_parse_response(const void *data, const int data_len,
-		    const unsigned long inode, void *opaque_data)
+unix_parse_response(const char *proto_name, const void *data,
+		    const int data_len, const unsigned long inode)
 {
-	const char *proto_name = opaque_data;
 	const struct unix_diag_msg *diag_msg = data;
 	struct rtattr *attr;
 	int rta_len = data_len - NLMSG_LENGTH(sizeof(*diag_msg));
@@ -337,7 +337,7 @@ unix_parse_response(const void *data, const int data_len,
 		     peer_str, path_str) < 0)
 		return -1;
 
-	return cache_inode_details(inode, details);
+	return cache_and_print_inode_details(inode, details);
 }
 
 static bool
@@ -362,10 +362,9 @@ netlink_send_query(const int fd, const unsigned long inode)
 }
 
 static int
-netlink_parse_response(const void *data, const int data_len,
-		       const unsigned long inode, void *opaque_data)
+netlink_parse_response(const char *proto_name, const void *data,
+		    const int data_len, const unsigned long inode)
 {
-	const char *proto_name = opaque_data;
 	const struct netlink_diag_msg *const diag_msg = data;
 	const char *netlink_proto;
 	char *details;
@@ -382,7 +381,12 @@ netlink_parse_response(const void *data, const int data_len,
 				diag_msg->ndiag_protocol);
 
 	if (netlink_proto) {
-		netlink_proto = STR_STRIP_PREFIX(netlink_proto, "NETLINK_");
+		static const char netlink_prefix[] = "NETLINK_";
+		const size_t netlink_prefix_len =
+			sizeof(netlink_prefix) -1;
+		if (strncmp(netlink_proto, netlink_prefix,
+			    netlink_prefix_len) == 0)
+			netlink_proto += netlink_prefix_len;
 		if (asprintf(&details, "%s:[%s:%u]", proto_name,
 			     netlink_proto, diag_msg->ndiag_portid) < 0)
 			return -1;
@@ -392,71 +396,58 @@ netlink_parse_response(const void *data, const int data_len,
 			return -1;
 	}
 
-	return cache_inode_details(inode, details);
+	return cache_and_print_inode_details(inode, details);
 }
 
-static const char *
-unix_get(const int fd, const unsigned long inode)
+static bool
+unix_print(const int fd, const unsigned long inode)
 {
 	return unix_send_query(fd, inode)
-		&& receive_responses(fd, inode, SOCK_DIAG_BY_FAMILY,
-				     unix_parse_response, (void *) "UNIX")
-		? get_sockaddr_by_inode_cached(inode) : NULL;
+		&& receive_responses(fd, inode, "UNIX", unix_parse_response);
 }
 
-static const char *
-inet_get(const int fd, const int family, const int protocol,
-	 const unsigned long inode, const char *proto_name)
+static bool
+tcp_v4_print(const int fd, const unsigned long inode)
 {
-	return inet_send_query(fd, family, protocol)
-		&& receive_responses(fd, inode, SOCK_DIAG_BY_FAMILY,
-				     inet_parse_response, (void *) proto_name)
-		? get_sockaddr_by_inode_cached(inode) : NULL;
+	return inet_print(fd, AF_INET, IPPROTO_TCP, inode, "TCP");
 }
 
-static const char *
-tcp_v4_get(const int fd, const unsigned long inode)
+static bool
+udp_v4_print(const int fd, const unsigned long inode)
 {
-	return inet_get(fd, AF_INET, IPPROTO_TCP, inode, "TCP");
+	return inet_print(fd, AF_INET, IPPROTO_UDP, inode, "UDP");
 }
 
-static const char *
-udp_v4_get(const int fd, const unsigned long inode)
+static bool
+tcp_v6_print(const int fd, const unsigned long inode)
 {
-	return inet_get(fd, AF_INET, IPPROTO_UDP, inode, "UDP");
+	return inet_print(fd, AF_INET6, IPPROTO_TCP, inode, "TCPv6");
 }
 
-static const char *
-tcp_v6_get(const int fd, const unsigned long inode)
+static bool
+udp_v6_print(const int fd, const unsigned long inode)
 {
-	return inet_get(fd, AF_INET6, IPPROTO_TCP, inode, "TCPv6");
+	return inet_print(fd, AF_INET6, IPPROTO_UDP, inode, "UDPv6");
 }
 
-static const char *
-udp_v6_get(const int fd, const unsigned long inode)
-{
-	return inet_get(fd, AF_INET6, IPPROTO_UDP, inode, "UDPv6");
-}
-
-static const char *
-netlink_get(const int fd, const unsigned long inode)
+static bool
+netlink_print(const int fd, const unsigned long inode)
 {
 	return netlink_send_query(fd, inode)
-		&& receive_responses(fd, inode, SOCK_DIAG_BY_FAMILY,
-				     netlink_parse_response, (void *) "NETLINK")
-		? get_sockaddr_by_inode_cached(inode) : NULL;
+		&& receive_responses(fd, inode, "NETLINK",
+				     netlink_parse_response);
 }
 
 static const struct {
 	const char *const name;
-	const char * (*const get)(int, unsigned long);
+	bool (*const print)(int, unsigned long);
 } protocols[] = {
-	[SOCK_PROTO_UNIX] = { "UNIX", unix_get },
-	[SOCK_PROTO_TCP] = { "TCP", tcp_v4_get },
-	[SOCK_PROTO_UDP] = { "UDP", udp_v4_get },
-	[SOCK_PROTO_TCPv6] = { "TCPv6", tcp_v6_get },
-	[SOCK_PROTO_UDPv6] = { "UDPv6", udp_v6_get },
-	[SOCK_PROTO_NETLINK] = { "NETLINK", netlink_get }
+	[SOCK_PROTO_UNIX] = { "UNIX", unix_print },
+	[SOCK_PROTO_TCP] = { "TCP", tcp_v4_print },
+	[SOCK_PROTO_UDP] = { "UDP", udp_v4_print },
+	[SOCK_PROTO_TCPv6] = { "TCPv6", tcp_v6_print },
+	[SOCK_PROTO_UDPv6] = { "UDPv6", udp_v6_print },
+	[SOCK_PROTO_NETLINK] = { "NETLINK", netlink_print }
 };
 
 enum sock_proto
@@ -471,179 +462,39 @@ get_proto_by_name(const char *const name)
 	return SOCK_PROTO_UNKNOWN;
 }
 
-static const char *
-get_sockaddr_by_inode_uncached(const unsigned long inode,
-			       const enum sock_proto proto)
+/* Given an inode number of a socket, print out the details
+ * of the ip address and port. */
+
+bool
+print_sockaddr_by_inode(const unsigned long inode, const enum sock_proto proto)
 {
 	if ((unsigned int) proto >= ARRAY_SIZE(protocols) ||
-	    (proto != SOCK_PROTO_UNKNOWN && !protocols[proto].get))
-		return NULL;
+	    (proto != SOCK_PROTO_UNKNOWN && !protocols[proto].print))
+		return false;
 
 	const int fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_SOCK_DIAG);
 	if (fd < 0)
-		return NULL;
-	const char *details = NULL;
+		return false;
+	bool r = false;
 
 	if (proto != SOCK_PROTO_UNKNOWN) {
-		details = protocols[proto].get(fd, inode);
+		r = protocols[proto].print(fd, inode);
+		if (!r) {
+			tprintf("%s:[%lu]", protocols[proto].name, inode);
+			r = true;
+		}
 	} else {
 		unsigned int i;
 		for (i = (unsigned int) SOCK_PROTO_UNKNOWN + 1;
 		     i < ARRAY_SIZE(protocols); ++i) {
-			if (!protocols[i].get)
+			if (!protocols[i].print)
 				continue;
-			details = protocols[i].get(fd, inode);
-			if (details)
+			r = protocols[i].print(fd, inode);
+			if (r)
 				break;
 		}
 	}
 
 	close(fd);
-	return details;
+	return r;
 }
-
-static bool
-print_sockaddr_by_inode_uncached(const unsigned long inode,
-				 const enum sock_proto proto)
-{
-	const char *details = get_sockaddr_by_inode_uncached(inode, proto);
-
-	if (details) {
-		tprints(details);
-		return true;
-	}
-
-	if ((unsigned int) proto < ARRAY_SIZE(protocols) &&
-	    protocols[proto].name) {
-		tprintf("%s:[%lu]", protocols[proto].name, inode);
-		return true;
-	}
-
-	return false;
-}
-
-/* Given an inode number of a socket, return its protocol details.  */
-const char *
-get_sockaddr_by_inode(struct tcb *const tcp, const int fd,
-		      const unsigned long inode)
-{
-	const char *details = get_sockaddr_by_inode_cached(inode);
-	return details ? details :
-		get_sockaddr_by_inode_uncached(inode, getfdproto(tcp, fd));
-}
-
-/* Given an inode number of a socket, print out its protocol details.  */
-bool
-print_sockaddr_by_inode(struct tcb *const tcp, const int fd,
-			const unsigned long inode)
-{
-	return print_sockaddr_by_inode_cached(inode) ? true :
-		print_sockaddr_by_inode_uncached(inode, getfdproto(tcp, fd));
-}
-
-#ifdef HAVE_LINUX_GENETLINK_H
-/*
- * Managing the cache for decoding communications of Netlink GENERIC protocol
- *
- * As name shown Netlink GENERIC protocol is generic protocol. The
- * numbers of msg types used in the protocol are not defined
- * statically. Kernel defines them on demand.  So the xlat converted
- * from header files doesn't help for decoding the protocol. Following
- * codes are building xlat(dyxlat) at runtime.
- */
-static bool
-genl_send_dump_families(const int fd)
-{
-	struct {
-		const struct nlmsghdr nlh;
-		struct genlmsghdr gnlh;
-	} req = {
-		.nlh = {
-			.nlmsg_len = sizeof(req),
-			.nlmsg_type = GENL_ID_CTRL,
-			.nlmsg_flags = NLM_F_DUMP | NLM_F_REQUEST,
-		},
-		.gnlh = {
-			.cmd = CTRL_CMD_GETFAMILY,
-		}
-	};
-	return send_query(fd, &req, sizeof(req));
-}
-
-static int
-genl_parse_families_response(const void *const data,
-			     const int data_len, const unsigned long inode,
-			     void *opaque_data)
-{
-	struct dyxlat *const dyxlat = opaque_data;
-	const struct genlmsghdr *const gnlh = data;
-	struct rtattr *attr;
-	int rta_len = data_len - NLMSG_LENGTH(sizeof(*gnlh));
-
-	char *name = NULL;
-	unsigned int name_len = 0;
-	uint16_t *id = NULL;
-
-	if (rta_len < 0)
-		return -1;
-	if (gnlh->cmd != CTRL_CMD_NEWFAMILY)
-		return -1;
-	if (gnlh->version != 2)
-		return -1;
-
-	for (attr = (struct rtattr *) (gnlh + 1);
-	     RTA_OK(attr, rta_len);
-	     attr = RTA_NEXT(attr, rta_len)) {
-		switch (attr->rta_type) {
-		case CTRL_ATTR_FAMILY_NAME:
-			if (!name) {
-				name = RTA_DATA(attr);
-				name_len = RTA_PAYLOAD(attr);
-			}
-			break;
-		case CTRL_ATTR_FAMILY_ID:
-			if (!id && RTA_PAYLOAD(attr) == sizeof(*id))
-				id = RTA_DATA(attr);
-			break;
-		}
-
-		if (name && id) {
-			dyxlat_add_pair(dyxlat, *id, name, name_len);
-			name = NULL;
-			id = NULL;
-		}
-	}
-
-	return 0;
-}
-
-const struct xlat *
-genl_families_xlat(void)
-{
-	static struct dyxlat *dyxlat;
-
-	if (!dyxlat) {
-		dyxlat = dyxlat_alloc(32);
-
-		int fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_GENERIC);
-		if (fd < 0)
-			goto out;
-
-		if (genl_send_dump_families(fd))
-			receive_responses(fd, 0, GENL_ID_CTRL,
-					  genl_parse_families_response, dyxlat);
-		close(fd);
-	}
-
-out:
-	return dyxlat_get(dyxlat);
-}
-
-#else /* !HAVE_LINUX_GENETLINK_H */
-
-const struct xlat *
-genl_families_xlat(void)
-{
-	return NULL;
-}
-#endif

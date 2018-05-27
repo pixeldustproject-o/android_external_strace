@@ -45,17 +45,10 @@
 # define CHECK_OVERFLOWGID(arg)
 #endif
 
-#define UNLINK_SAMPLE					\
-	do {						\
-		if (unlink(sample))			\
-			perror_msg_and_fail("unlink");	\
-	} while (0)
-
-#define CLOSE_SAMPLE					\
-	do {						\
-		if (close(fd))				\
-			perror_msg_and_fail("close");	\
-	} while (0)
+#define UNLINK_SAMPLE \
+	if (unlink(sample)) perror_msg_and_fail("unlink")
+#define CLOSE_SAMPLE \
+	if (close(fd)) perror_msg_and_fail("close")
 
 #ifdef ACCESS_BY_DESCRIPTOR
 # define SYSCALL_ARG1 fd

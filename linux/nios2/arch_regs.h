@@ -1,1 +1,1 @@
-extern unsigned int *const nios2_sp_ptr;
+extern unsigned long *const nios2_sp_ptr;

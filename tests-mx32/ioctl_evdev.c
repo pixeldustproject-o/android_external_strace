@@ -67,11 +67,9 @@ print_ffe_common(const struct ff_effect *const ffe, const char *const type_str)
 # endif /* VERBOSE */
 }
 
-# define TEST_NULL_ARG(cmd)						\
-	do {								\
-		ioctl(-1, cmd, 0);					\
-		printf("ioctl(-1, %s, NULL) = -1 EBADF (%m)\n", #cmd);	\
-	} while (0)
+# define TEST_NULL_ARG(cmd) \
+	ioctl(-1, cmd, 0); \
+	printf("ioctl(-1, %s, NULL) = -1 EBADF (%m)\n", #cmd)
 
 int
 main(void)

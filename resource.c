@@ -120,7 +120,8 @@ SYS_FUNC(getrlimit)
 	if (entering(tcp)) {
 		printxval(resources, tcp->u_arg[0], "RLIMIT_???");
 		tprints(", ");
-	} else {
+	}
+	else {
 		decode_rlimit(tcp, tcp->u_arg[1]);
 	}
 	return 0;
@@ -156,7 +157,8 @@ SYS_FUNC(getrusage)
 	if (entering(tcp)) {
 		printxval(usagewho, tcp->u_arg[0], "RUSAGE_???");
 		tprints(", ");
-	} else
+	}
+	else
 		printrusage(tcp, tcp->u_arg[1]);
 	return 0;
 }
@@ -167,7 +169,8 @@ SYS_FUNC(osf_getrusage)
 	if (entering(tcp)) {
 		printxval(usagewho, tcp->u_arg[0], "RUSAGE_???");
 		tprints(", ");
-	} else
+	}
+	else
 		printrusage32(tcp, tcp->u_arg[1]);
 	return 0;
 }
